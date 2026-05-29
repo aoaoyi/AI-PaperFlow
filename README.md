@@ -90,6 +90,44 @@ https://Futuresxy.github.io/paper-daily/
 - 每个方向先写 5 到 10 个关键词即可。
 - 不确定分类时，可以先用 `cs.CL`、`cs.LG`、`cs.AI`。
 
+### 配置论文来源
+
+默认会从这些开放数据源搜索论文：
+
+- `arxiv`：arXiv API，适合预印本。
+- `openalex`：OpenAlex Works API，覆盖论文、会议、期刊和机构元数据。
+- `crossref`：Crossref Works API，适合 DOI 和期刊/会议元数据。
+- `semantic_scholar`：Semantic Scholar Graph API，适合补充摘要、开放 PDF 和引用相关元数据。
+- `google_scholar_serpapi`：通过 SerpApi 的 Google Scholar API 搜索，需要 `SERPAPI_API_KEY`，默认不启用。
+
+你也可以在 Issue JSON 顶层添加 `sources`，只启用自己需要的来源：
+
+```json
+{
+  "sources": [
+    { "type": "arxiv", "name": "arXiv" },
+    { "type": "openalex", "name": "OpenAlex" },
+    { "type": "google_scholar_serpapi", "name": "Google Scholar", "enabled": false },
+    { "type": "feed", "name": "某期刊 RSS", "url": "https://example.com/rss.xml" }
+  ],
+  "topics": []
+}
+```
+
+`feed` 支持 RSS 和 Atom，可用于自定义论文站点、期刊目录页、实验室论文列表等公开订阅源。Google Scholar 没有稳定官方公开 API，不建议直接爬网页；如果确实需要 Google Scholar，可以启用 `google_scholar_serpapi` 并配置 SerpApi Key，或者把第三方服务转成 RSS/Atom 后用 `feed` 接入。
+
+可选的 Actions Variables：
+
+| Name | 示例 | 说明 |
+| --- | --- | --- |
+| `PAPER_SOURCES` | `arxiv,openalex,crossref,semantic_scholar` | 未在 JSON 配置 `sources` 时使用的默认来源 |
+| `CONTACT_EMAIL` | `you@example.com` | 提供给 OpenAlex/Crossref 的联系邮箱，进入 polite pool |
+| `CROSSREF_EMAIL` | `you@example.com` | 只给 Crossref 使用的邮箱 |
+| `OPENALEX_EMAIL` | `you@example.com` | 只给 OpenAlex 使用的邮箱 |
+| `SEMANTIC_SCHOLAR_API_KEY` | `...` | Semantic Scholar API Key，可提高稳定性 |
+| `SERPAPI_API_KEY` | `...` | 启用 `google_scholar_serpapi` 时需要 |
+| `SOURCE_DELAY_SECONDS` | `3` | 非 arXiv 来源的 topic 请求间隔 |
+
 ## 第 4 步：配置模型 API Key（可选）
 
 不配置 API Key 也能运行；配置后中文摘要质量会更好。

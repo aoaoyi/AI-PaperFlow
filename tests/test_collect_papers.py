@@ -8,6 +8,8 @@ from scripts.collect_papers import (
     collection_cutoff,
     is_retryable_arxiv_error,
     merge_with_retained_papers,
+    openalex_abstract_text,
+    parse_sources,
     trim_papers_for_storage,
 )
 
@@ -74,6 +76,26 @@ class RetentionTest(unittest.TestCase):
         self.assertTrue(is_retryable_arxiv_error(rate_limited))
         self.assertTrue(is_retryable_arxiv_error(TimeoutError("timed out")))
         self.assertFalse(is_retryable_arxiv_error(not_found))
+
+    def test_parse_sources_supports_custom_feed(self) -> None:
+        sources = parse_sources(
+            {
+                "sources": [
+                    "arxiv",
+                    {"type": "feed", "name": "Journal Feed", "url": "https://example.com/rss.xml"},
+                    {"type": "crossref", "enabled": False},
+                ]
+            }
+        )
+
+        self.assertEqual([source.type for source in sources], ["arxiv", "feed"])
+        self.assertEqual(sources[1].name, "Journal Feed")
+        self.assertEqual(sources[1].url, "https://example.com/rss.xml")
+
+    def test_openalex_abstract_text_reconstructs_inverted_index(self) -> None:
+        abstract = openalex_abstract_text({"abstract_inverted_index": {"hello": [0], "world": [1]}})
+
+        self.assertEqual(abstract, "hello world")
 
     def test_merge_retains_previous_high_medium_and_recent_low(self) -> None:
         now = dt.datetime(2026, 5, 28, tzinfo=dt.timezone.utc)

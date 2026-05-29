@@ -53,6 +53,13 @@ jobs:
           MAX_STORED_PAPERS: ${{ vars.MAX_STORED_PAPERS || '800' }}
           MAX_DATA_BYTES: ${{ vars.MAX_DATA_BYTES || '8388608' }}
           RECENT_HISTORY_DAYS: ${{ vars.RECENT_HISTORY_DAYS || '45' }}
+          PAPER_SOURCES: ${{ vars.PAPER_SOURCES || '' }}
+          CONTACT_EMAIL: ${{ vars.CONTACT_EMAIL || '' }}
+          CROSSREF_EMAIL: ${{ vars.CROSSREF_EMAIL || '' }}
+          OPENALEX_EMAIL: ${{ vars.OPENALEX_EMAIL || '' }}
+          SOURCE_DELAY_SECONDS: ${{ vars.SOURCE_DELAY_SECONDS || '3' }}
+          SEMANTIC_SCHOLAR_API_KEY: ${{ secrets.SEMANTIC_SCHOLAR_API_KEY }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
           INCREMENTAL_SINCE_LAST_RUN: ${{ github.event_name == 'schedule' && 'true' || vars.INCREMENTAL_SINCE_LAST_RUN || 'false' }}
           LLM_CONCURRENCY: ${{ vars.LLM_CONCURRENCY || '2' }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}

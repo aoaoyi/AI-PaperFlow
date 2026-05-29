@@ -8,6 +8,14 @@ assignees: ''
 
 ```json
 {
+  "sources": [
+    { "type": "arxiv", "name": "arXiv" },
+    { "type": "openalex", "name": "OpenAlex" },
+    { "type": "crossref", "name": "Crossref" },
+    { "type": "semantic_scholar", "name": "Semantic Scholar" },
+    { "type": "google_scholar_serpapi", "name": "Google Scholar", "enabled": false },
+    { "type": "feed", "name": "自定义期刊 RSS", "url": "https://example.com/rss.xml", "enabled": false }
+  ],
   "topics": [
     {
       "id": "llm_low_precision_quantization",

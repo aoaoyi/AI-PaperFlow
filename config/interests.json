@@ -1,4 +1,10 @@
 {
+  "sources": [
+    { "type": "arxiv", "name": "arXiv" },
+    { "type": "openalex", "name": "OpenAlex" },
+    { "type": "crossref", "name": "Crossref" },
+    { "type": "semantic_scholar", "name": "Semantic Scholar" }
+  ],
   "topics": [
     {
       "id": "llm_low_precision_quantization",

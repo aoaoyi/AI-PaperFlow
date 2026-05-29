@@ -21,6 +21,10 @@ from typing import Any
 
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
+OPENALEX_WORKS_URL = "https://api.openalex.org/works"
+CROSSREF_WORKS_URL = "https://api.crossref.org/works"
+SEMANTIC_SCHOLAR_SEARCH_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
+SERPAPI_SEARCH_URL = "https://serpapi.com/search.json"
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 DEFAULT_CONFIG = Path("config/interests.json")
 DEFAULT_OUTPUT = Path("web/data/papers.json")
@@ -29,6 +33,8 @@ DEFAULT_MAX_STORED_PAPERS = 800
 DEFAULT_MAX_DATA_BYTES = 8 * 1024 * 1024
 DEFAULT_RECENT_HISTORY_DAYS = 45
 TRANSIENT_HTTP_CODES = {429, 500, 502, 503, 504}
+DEFAULT_SOURCE_TYPES = ["arxiv", "openalex", "crossref", "semantic_scholar"]
+FEED_NAMESPACES = {"atom": "http://www.w3.org/2005/Atom"}
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,14 @@ class Topic:
     description: str
     keywords: list[str]
     arxiv_categories: list[str]
+
+
+@dataclass(frozen=True)
+class SourceConfig:
+    type: str
+    name: str
+    url: str = ""
+    enabled: bool = True
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -64,6 +78,13 @@ def slugify(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
 
 
+def env_list(name: str, default: list[str]) -> list[str]:
+    value = os.getenv(name, "")
+    if not value.strip():
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def parse_topics(config: dict[str, Any]) -> list[Topic]:
     topics = []
     for item in config.get("topics", []):
@@ -80,6 +101,34 @@ def parse_topics(config: dict[str, Any]) -> list[Topic]:
     if not topics:
         raise ValueError("No topics found in configuration.")
     return topics
+
+
+def parse_sources(config: dict[str, Any]) -> list[SourceConfig]:
+    configured = config.get("sources")
+    if not configured:
+        configured = [{"type": source_type} for source_type in env_list("PAPER_SOURCES", DEFAULT_SOURCE_TYPES)]
+
+    sources = []
+    for item in configured:
+        if isinstance(item, str):
+            item = {"type": item}
+        if not isinstance(item, dict):
+            continue
+        source_type = str(item.get("type") or "").strip().lower()
+        if not source_type:
+            continue
+        if item.get("enabled", True) is False:
+            continue
+        name = str(item.get("name") or source_type.replace("_", " ").title())
+        sources.append(
+            SourceConfig(
+                type=source_type,
+                name=name,
+                url=str(item.get("url") or ""),
+                enabled=bool(item.get("enabled", True)),
+            )
+        )
+    return sources
 
 
 def github_request(url: str, token: str) -> Any:
@@ -149,6 +198,48 @@ def arxiv_query_for_topic(topic: Topic) -> str:
     if category_terms:
         parts.append("(" + " OR ".join(category_terms) + ")")
     return " AND ".join(parts) if parts else f'all:"{topic.name}"'
+
+
+def topic_text_query(topic: Topic, limit: int = 6) -> str:
+    terms = topic.keywords[:limit] or [topic.name]
+    return " OR ".join(terms)
+
+
+def topic_plain_query(topic: Topic, limit: int = 6) -> str:
+    return " ".join(topic.keywords[:limit]) or topic.name
+
+
+def html_to_text(value: str) -> str:
+    without_tags = re.sub(r"<[^>]+>", " ", value)
+    return normalize_space(html.unescape(without_tags))
+
+
+def date_to_iso(value: str | int | None) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, int):
+        return f"{value:04d}-01-01T00:00:00+00:00"
+    parsed = parse_datetime(str(value))
+    if parsed:
+        return parsed.isoformat()
+    text = str(value)
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return f"{text}T00:00:00+00:00"
+    if re.fullmatch(r"\d{4}", text):
+        return f"{text}-01-01T00:00:00+00:00"
+    return text
+
+
+def request_json(url: str, headers: dict[str, str] | None = None, timeout: float = 60) -> Any:
+    req = urllib.request.Request(url, headers=headers or {"User-Agent": "paper-daily-collector/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def request_bytes(url: str, headers: dict[str, str] | None = None, timeout: float = 60) -> bytes:
+    req = urllib.request.Request(url, headers=headers or {"User-Agent": "paper-daily-collector/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
 
 
 def arxiv_retry_wait_seconds(exc: Exception, attempt: int) -> float:
@@ -241,6 +332,299 @@ def fetch_arxiv(topic: Topic, max_results: int) -> list[dict[str, Any]]:
             }
         )
     return papers
+
+
+def openalex_abstract_text(work: dict[str, Any]) -> str:
+    inverted = work.get("abstract_inverted_index")
+    if not isinstance(inverted, dict):
+        return ""
+    words: list[tuple[int, str]] = []
+    for word, positions in inverted.items():
+        if not isinstance(positions, list):
+            continue
+        for position in positions:
+            if isinstance(position, int):
+                words.append((position, str(word)))
+    return " ".join(word for _, word in sorted(words))
+
+
+def fetch_openalex(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
+    params = {
+        "search": topic_plain_query(topic),
+        "per-page": str(max_results),
+        "sort": "publication_date:desc",
+    }
+    mailto = os.getenv("CONTACT_EMAIL") or os.getenv("OPENALEX_EMAIL")
+    if mailto:
+        params["mailto"] = mailto
+    url = f"{OPENALEX_WORKS_URL}?{urllib.parse.urlencode(params)}"
+    data = request_json(url, timeout=float(os.getenv("OPENALEX_TIMEOUT_SECONDS", "60")))
+    papers = []
+    for work in data.get("results", []):
+        locations = work.get("locations") or []
+        primary = work.get("primary_location") or {}
+        best_oa = work.get("best_oa_location") or {}
+        pdf_url = (
+            primary.get("pdf_url")
+            or best_oa.get("pdf_url")
+            or next((location.get("pdf_url") for location in locations if location.get("pdf_url")), "")
+        )
+        authors = [
+            str((authorship.get("author") or {}).get("display_name") or "")
+            for authorship in work.get("authorships", [])
+        ]
+        concepts = [
+            str(concept.get("display_name") or "")
+            for concept in work.get("concepts", [])[:8]
+            if concept.get("display_name")
+        ]
+        work_id = str(work.get("id") or work.get("doi") or work.get("title") or "")
+        if not work_id:
+            continue
+        papers.append(
+            {
+                "id": f"openalex:{work_id.rsplit('/', 1)[-1]}",
+                "source": source.name,
+                "title": normalize_space(str(work.get("title") or "")),
+                "authors": [author for author in authors if author],
+                "summary": normalize_space(openalex_abstract_text(work)),
+                "published": date_to_iso(work.get("publication_date") or work.get("publication_year")),
+                "updated": "",
+                "paper_url": str(work.get("doi") or work.get("id") or ""),
+                "pdf_url": str(pdf_url or ""),
+                "categories": concepts,
+                "seed_topic": topic.id,
+            }
+        )
+    return papers
+
+
+def crossref_date(item: dict[str, Any]) -> str:
+    for field in ("published-print", "published-online", "published", "created", "issued"):
+        date_parts = (item.get(field) or {}).get("date-parts") or []
+        if date_parts and date_parts[0]:
+            parts = list(date_parts[0])
+            year = int(parts[0])
+            month = int(parts[1]) if len(parts) > 1 else 1
+            day = int(parts[2]) if len(parts) > 2 else 1
+            return dt.datetime(year, month, day, tzinfo=dt.timezone.utc).isoformat()
+    return ""
+
+
+def fetch_crossref(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
+    params = {
+        "query.bibliographic": topic_plain_query(topic),
+        "rows": str(max_results),
+        "sort": "published",
+        "order": "desc",
+    }
+    mailto = os.getenv("CONTACT_EMAIL") or os.getenv("CROSSREF_EMAIL")
+    if mailto:
+        params["mailto"] = mailto
+    headers = {"User-Agent": f"paper-daily-collector/1.0 (mailto:{mailto or 'unknown@example.com'})"}
+    url = f"{CROSSREF_WORKS_URL}?{urllib.parse.urlencode(params)}"
+    data = request_json(url, headers=headers, timeout=float(os.getenv("CROSSREF_TIMEOUT_SECONDS", "60")))
+    papers = []
+    for item in (data.get("message") or {}).get("items", []):
+        title = normalize_space(" ".join(str(part) for part in item.get("title", []) if part))
+        doi = str(item.get("DOI") or "")
+        paper_url = str(item.get("URL") or (f"https://doi.org/{doi}" if doi else ""))
+        if not title or not (doi or paper_url):
+            continue
+        authors = []
+        for author in item.get("author", [])[:12]:
+            name = normalize_space(f"{author.get('given', '')} {author.get('family', '')}")
+            if name:
+                authors.append(name)
+        subjects = [str(subject) for subject in item.get("subject", [])[:8]]
+        papers.append(
+            {
+                "id": f"crossref:{doi or slugify(title)}",
+                "source": source.name,
+                "title": title,
+                "authors": authors,
+                "summary": html_to_text(str(item.get("abstract") or "")),
+                "published": crossref_date(item),
+                "updated": "",
+                "paper_url": paper_url,
+                "pdf_url": "",
+                "categories": subjects,
+                "seed_topic": topic.id,
+            }
+        )
+    return papers
+
+
+def fetch_semantic_scholar(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
+    params = {
+        "query": topic_plain_query(topic),
+        "limit": str(min(max_results, 100)),
+        "fields": "paperId,title,abstract,authors,year,publicationDate,url,openAccessPdf,venue,externalIds,fieldsOfStudy",
+    }
+    headers = {"User-Agent": "paper-daily-collector/1.0"}
+    api_key = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
+    if api_key:
+        headers["x-api-key"] = api_key
+    url = f"{SEMANTIC_SCHOLAR_SEARCH_URL}?{urllib.parse.urlencode(params)}"
+    data = request_json(url, headers=headers, timeout=float(os.getenv("SEMANTIC_SCHOLAR_TIMEOUT_SECONDS", "60")))
+    papers = []
+    for item in data.get("data", []):
+        paper_id = str(item.get("paperId") or "")
+        title = normalize_space(str(item.get("title") or ""))
+        if not paper_id or not title:
+            continue
+        pdf_url = str((item.get("openAccessPdf") or {}).get("url") or "")
+        authors = [str(author.get("name") or "") for author in item.get("authors", [])[:12]]
+        categories = [str(value) for value in item.get("fieldsOfStudy", []) if value]
+        venue = str(item.get("venue") or "")
+        if venue:
+            categories.append(venue)
+        papers.append(
+            {
+                "id": f"s2:{paper_id}",
+                "source": source.name,
+                "title": title,
+                "authors": [author for author in authors if author],
+                "summary": normalize_space(str(item.get("abstract") or "")),
+                "published": date_to_iso(item.get("publicationDate") or item.get("year")),
+                "updated": "",
+                "paper_url": str(item.get("url") or f"https://www.semanticscholar.org/paper/{paper_id}"),
+                "pdf_url": pdf_url,
+                "categories": categories[:8],
+                "seed_topic": topic.id,
+            }
+        )
+    return papers
+
+
+def fetch_google_scholar_serpapi(topic: Topic, max_results: int, source: SourceConfig) -> list[dict[str, Any]]:
+    api_key = os.getenv("SERPAPI_API_KEY") or os.getenv("SERPAPI_KEY")
+    if not api_key:
+        raise RuntimeError("SERPAPI_API_KEY is required for google_scholar_serpapi source")
+    params = {
+        "engine": "google_scholar",
+        "q": topic_plain_query(topic),
+        "num": str(min(max_results, 20)),
+        "api_key": api_key,
+    }
+    data = request_json(
+        f"{SERPAPI_SEARCH_URL}?{urllib.parse.urlencode(params)}",
+        timeout=float(os.getenv("SERPAPI_TIMEOUT_SECONDS", "90")),
+    )
+    papers = []
+    for item in data.get("organic_results", []):
+        title = normalize_space(str(item.get("title") or ""))
+        paper_url = str(item.get("link") or "")
+        if not title or not paper_url:
+            continue
+        publication = item.get("publication_info") or {}
+        publication_summary = str(publication.get("summary") or "")
+        year_match = re.search(r"\b(19|20)\d{2}\b", publication_summary)
+        resources = item.get("resources") or []
+        pdf_url = next((str(resource.get("link")) for resource in resources if str(resource.get("file_format", "")).upper() == "PDF"), "")
+        papers.append(
+            {
+                "id": f"google-scholar:{slugify(paper_url or title)}",
+                "source": source.name,
+                "title": title,
+                "authors": [],
+                "summary": normalize_space(" ".join([str(item.get("snippet") or ""), publication_summary])),
+                "published": date_to_iso(year_match.group(0) if year_match else ""),
+                "updated": "",
+                "paper_url": paper_url,
+                "pdf_url": pdf_url,
+                "categories": ["Google Scholar"],
+                "seed_topic": topic.id,
+            }
+        )
+    return papers
+
+
+def link_from_atom(entry: ET.Element) -> str:
+    alternate = ""
+    for link in entry.findall("atom:link", FEED_NAMESPACES):
+        href = link.attrib.get("href", "")
+        rel = link.attrib.get("rel", "alternate")
+        if rel == "alternate" and href:
+            return href
+        if href and not alternate:
+            alternate = href
+    return alternate
+
+
+def fetch_feed(source: SourceConfig, max_results: int) -> list[dict[str, Any]]:
+    if not source.url:
+        return []
+    xml_data = request_bytes(source.url, timeout=float(os.getenv("FEED_TIMEOUT_SECONDS", "60")))
+    root = ET.fromstring(xml_data)
+    papers = []
+    atom_entries = root.findall("atom:entry", FEED_NAMESPACES)
+    if root.tag.endswith("entry"):
+        atom_entries = [root]
+    for entry in atom_entries[:max_results]:
+        title = normalize_space(entry.findtext("atom:title", default="", namespaces=FEED_NAMESPACES))
+        summary = entry.findtext("atom:summary", default="", namespaces=FEED_NAMESPACES) or entry.findtext("atom:content", default="", namespaces=FEED_NAMESPACES)
+        paper_url = link_from_atom(entry)
+        paper_id = entry.findtext("atom:id", default=paper_url, namespaces=FEED_NAMESPACES)
+        authors = [
+            normalize_space(author.findtext("atom:name", default="", namespaces=FEED_NAMESPACES))
+            for author in entry.findall("atom:author", FEED_NAMESPACES)
+        ]
+        categories = [category.attrib.get("term", "") for category in entry.findall("atom:category", FEED_NAMESPACES)]
+        papers.append(
+            {
+                "id": f"feed:{slugify(source.name)}:{paper_id or paper_url or slugify(title)}",
+                "source": source.name,
+                "title": title,
+                "authors": [author for author in authors if author],
+                "summary": html_to_text(summary or ""),
+                "published": date_to_iso(entry.findtext("atom:published", default="", namespaces=FEED_NAMESPACES)),
+                "updated": date_to_iso(entry.findtext("atom:updated", default="", namespaces=FEED_NAMESPACES)),
+                "paper_url": paper_url,
+                "pdf_url": "",
+                "categories": [category for category in categories if category],
+                "seed_topic": "",
+            }
+        )
+
+    for item in root.findall(".//channel/item")[:max_results]:
+        title = normalize_space(item.findtext("title", default=""))
+        paper_url = normalize_space(item.findtext("link", default=""))
+        guid = normalize_space(item.findtext("guid", default=paper_url))
+        papers.append(
+            {
+                "id": f"feed:{slugify(source.name)}:{guid or paper_url or slugify(title)}",
+                "source": source.name,
+                "title": title,
+                "authors": [],
+                "summary": html_to_text(item.findtext("description", default="")),
+                "published": date_to_iso(item.findtext("pubDate", default="")),
+                "updated": "",
+                "paper_url": paper_url,
+                "pdf_url": "",
+                "categories": [],
+                "seed_topic": "",
+            }
+        )
+    return [paper for paper in papers if paper.get("title")]
+
+
+def fetch_source_topic(source: SourceConfig, topic: Topic, max_results: int) -> list[dict[str, Any]]:
+    if source.type == "arxiv":
+        return fetch_arxiv(topic, max_results)
+    if source.type == "openalex":
+        return fetch_openalex(topic, max_results, source)
+    if source.type == "crossref":
+        return fetch_crossref(topic, max_results, source)
+    if source.type == "semantic_scholar":
+        return fetch_semantic_scholar(topic, max_results, source)
+    if source.type == "google_scholar_serpapi":
+        return fetch_google_scholar_serpapi(topic, max_results, source)
+    raise ValueError(f"Unsupported topic source type: {source.type}")
+
+
+def is_feed_source(source: SourceConfig) -> bool:
+    return source.type in {"feed", "rss", "atom"}
 
 
 def parse_datetime(value: str | None) -> dt.datetime | None:
@@ -623,37 +1007,66 @@ def collect(
     default_config = load_json(config_path)
     config = load_issue_config(default_config)
     topics = parse_topics(config)
+    sources = parse_sources(config)
     now = dt.datetime.now(dt.timezone.utc)
     existing_payload = load_existing_payload(output_path)
     cutoff, collection_mode = collection_cutoff(existing_payload, now, days, incremental_since_last_run)
     all_candidates = []
     successful_fetches = 0
     failed_fetches = 0
-    for index, topic in enumerate(topics):
-        if index:
-            time.sleep(float(os.getenv("ARXIV_DELAY_SECONDS", "15")))
-        print(f"Fetching arXiv papers for topic: {topic.name}", flush=True)
-        try:
-            topic_papers = fetch_arxiv(topic, max_per_topic)
-            all_candidates.extend(topic_papers)
-            successful_fetches += 1
-        except Exception as exc:
-            failed_fetches += 1
-            print(f"Warning: arXiv request failed for {topic.name}: {exc}", file=sys.stderr)
-            if should_stop_arxiv_fetches(exc):
-                skipped = len(topics) - index - 1
-                failed_fetches += skipped
-                if skipped:
-                    print(
-                        f"Stopping arXiv fetches after {exc}; skipped {skipped} remaining topic(s) to avoid further throttling.",
-                        file=sys.stderr,
-                    )
-                break
+    source_stats: dict[str, dict[str, Any]] = {}
+    source_delay_seconds = float(os.getenv("SOURCE_DELAY_SECONDS", "3"))
+    for source in sources:
+        source_stats[source.name] = {"type": source.type, "successful_fetches": 0, "failed_fetches": 0}
+        if not source.enabled:
+            continue
+        if is_feed_source(source):
+            print(f"Fetching feed source: {source.name}", flush=True)
+            try:
+                feed_papers = fetch_feed(source, max_per_topic * max(1, len(topics)))
+                all_candidates.extend(feed_papers)
+                successful_fetches += 1
+                source_stats[source.name]["successful_fetches"] += 1
+            except Exception as exc:
+                failed_fetches += 1
+                source_stats[source.name]["failed_fetches"] += 1
+                source_stats[source.name]["last_error"] = str(exc)
+                print(f"Warning: feed source failed for {source.name}: {exc}", file=sys.stderr)
+            time.sleep(source_delay_seconds)
+            continue
 
-    if failed_fetches == len(topics) and existing_payload:
+        for index, topic in enumerate(topics):
+            if index:
+                if source.type == "arxiv":
+                    time.sleep(float(os.getenv("ARXIV_DELAY_SECONDS", "15")))
+                else:
+                    time.sleep(source_delay_seconds)
+            print(f"Fetching {source.name} papers for topic: {topic.name}", flush=True)
+            try:
+                topic_papers = fetch_source_topic(source, topic, max_per_topic)
+                all_candidates.extend(topic_papers)
+                successful_fetches += 1
+                source_stats[source.name]["successful_fetches"] += 1
+            except Exception as exc:
+                failed_fetches += 1
+                source_stats[source.name]["failed_fetches"] += 1
+                source_stats[source.name]["last_error"] = str(exc)
+                print(f"Warning: {source.name} request failed for {topic.name}: {exc}", file=sys.stderr)
+                if source.type == "arxiv" and should_stop_arxiv_fetches(exc):
+                    skipped = len(topics) - index - 1
+                    failed_fetches += skipped
+                    source_stats[source.name]["failed_fetches"] += skipped
+                    if skipped:
+                        print(
+                            f"Stopping arXiv fetches after {exc}; skipped {skipped} remaining topic(s) to avoid further throttling.",
+                            file=sys.stderr,
+                        )
+                    break
+
+    if successful_fetches == 0 and failed_fetches > 0 and existing_payload:
         existing = existing_payload
         if existing.get("papers"):
-            print("All sources failed; preserving existing paper data.", file=sys.stderr)
+            print("All configured sources failed; preserving existing paper data.", file=sys.stderr)
             retained_papers, retention_stats = merge_with_retained_papers(
                 [], existing_payload, now, recent_history_days
             )
@@ -664,9 +1077,10 @@ def collect(
             existing_stats = existing.setdefault("stats", {})
             existing_stats.update(
                 {
-                    "last_error": "All arXiv requests failed.",
+                    "last_error": "All configured paper sources failed.",
                     "successful_fetches": successful_fetches,
                     "failed_fetches": failed_fetches,
+                    "source_stats": source_stats,
                     **retention_stats,
                 }
             )
@@ -744,6 +1158,8 @@ def collect(
             "collection_mode": collection_mode,
             "collection_cutoff_iso": cutoff.isoformat(),
             "max_per_topic": max_per_topic,
+            "sources": [source.__dict__ for source in sources],
+            "source_stats": source_stats,
             "llm_enabled": llm_enabled(),
             "llm_concurrency": int(os.getenv("LLM_CONCURRENCY", "2")),
             "recent_history_days": recent_history_days,
