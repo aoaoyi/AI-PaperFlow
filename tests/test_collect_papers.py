@@ -6,6 +6,7 @@ from unittest import mock
 
 from scripts.collect_papers import (
     ConferenceSource,
+    arxiv_query_for_topic,
     arxiv_retry_wait_seconds,
     cached_conference_years,
     collection_cutoff,
@@ -14,6 +15,7 @@ from scripts.collect_papers import (
     fetch_arxiv,
     find_conference_abstract_by_title,
     is_relevant_enough,
+    has_meaningful_summary,
     is_retryable_dblp_error,
     is_retryable_arxiv_error,
     merge_with_retained_papers,
@@ -69,6 +71,7 @@ class RetentionTest(unittest.TestCase):
         os.environ.pop("MIN_TITLE_ONLY_SCORE", None)
         os.environ.pop("MIN_PAPER_SCORE", None)
         os.environ.pop("CONFERENCE_ABSTRACT_SOURCES", None)
+        os.environ.pop("ARXIV_QUERY_MODE", None)
 
     def test_arxiv_retry_wait_uses_retry_after_header(self) -> None:
         os.environ["ARXIV_RETRY_MIN_SECONDS"] = "30"
@@ -225,6 +228,36 @@ class RetentionTest(unittest.TestCase):
         self.assertEqual(papers[0]["authors"], ["Ada Example"])
         self.assertEqual(papers[0]["categories"], ["cs.AR"])
 
+    def test_arxiv_query_defaults_to_broad_single_request(self) -> None:
+        topic = Topic(
+            id="llm",
+            name="LLM inference",
+            description="",
+            keywords=["LLM inference"],
+            arxiv_categories=["cs.CL", "cs.LG"],
+        )
+
+        query = arxiv_query_for_topic(topic)
+
+        self.assertIn('all:"LLM inference"', query)
+        self.assertIn("cat:cs.CL", query)
+        self.assertIn(" OR ", query)
+        self.assertNotIn(" AND ", query)
+
+    def test_arxiv_query_can_use_strict_mode(self) -> None:
+        os.environ["ARXIV_QUERY_MODE"] = "strict"
+        topic = Topic(
+            id="llm",
+            name="LLM inference",
+            description="",
+            keywords=["LLM inference"],
+            arxiv_categories=["cs.CL"],
+        )
+
+        query = arxiv_query_for_topic(topic)
+
+        self.assertIn(" AND ", query)
+
     def test_title_matching_allows_punctuation_differences(self) -> None:
         self.assertTrue(titles_match("Fast Tensor Compute: An LLM Serving Study.", "Fast Tensor Compute - An LLM Serving Study"))
         self.assertFalse(titles_match("Fast Tensor Compute", "Database Indexing for Cloud Storage"))
@@ -273,6 +306,41 @@ class RetentionTest(unittest.TestCase):
         self.assertEqual(candidate["authors"], ["Ada Example"])
         self.assertEqual(candidate["pdf_url"], "https://example.com/paper.pdf")
         self.assertIn("ISCA", candidate["categories"])
+
+    def test_semantic_scholar_candidate_handles_null_lists(self) -> None:
+        candidate = semantic_scholar_paper_from_item(
+            {
+                "paperId": "abc",
+                "title": "Fast Tensor Compute",
+                "abstract": "This paper presents a detailed architecture for tensor compute in LLM serving systems.",
+                "authors": None,
+                "fieldsOfStudy": None,
+                "openAccessPdf": None,
+            }
+        )
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate["authors"], [])
+        self.assertEqual(candidate["categories"], [])
+
+    def test_dblp_toc_summary_is_not_meaningful_abstract(self) -> None:
+        self.assertFalse(
+            has_meaningful_summary(
+                {
+                    "source_type": "conference",
+                    "summary": "DBLP 题录：ASPLOS 2026 会议论文。 页码：1815-1831。" * 3,
+                }
+            )
+        )
+        self.assertTrue(
+            has_meaningful_summary(
+                {
+                    "source_type": "conference",
+                    "abstract_source": "OpenAlex",
+                    "summary": "This paper presents a detailed architecture for tensor compute in LLM serving systems. " * 2,
+                }
+            )
+        )
 
     def test_openalex_candidate_reconstructs_abstract(self) -> None:
         candidate = openalex_paper_from_work(

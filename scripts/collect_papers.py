@@ -310,6 +310,19 @@ def arxiv_query_for_topic(topic: Topic) -> str:
         keyword_terms.append(f'all:"{escaped}"')
 
     category_terms = [f"cat:{category}" for category in topic.arxiv_categories[:5]]
+    query_mode = os.getenv("ARXIV_QUERY_MODE", "broad").strip().lower()
+    if query_mode == "strict":
+        parts = []
+        if keyword_terms:
+            parts.append("(" + " OR ".join(keyword_terms) + ")")
+        if category_terms:
+            parts.append("(" + " OR ".join(category_terms) + ")")
+        return " AND ".join(parts) if parts else f'all:"{topic.name}"'
+
+    terms = [*keyword_terms, *category_terms]
+    if terms:
+        return "(" + " OR ".join(terms) + ")"
+
     parts = []
     if keyword_terms:
         parts.append("(" + " OR ".join(keyword_terms) + ")")
@@ -497,7 +510,7 @@ def fetch_arxiv(topic: Topic, max_results: int) -> list[dict[str, Any]]:
         sort_order="descending",
         label=topic.name,
     )
-    if env_flag("ARXIV_EXPAND_CATEGORY_SEARCH", True) and topic.arxiv_categories:
+    if env_flag("ARXIV_EXPAND_CATEGORY_SEARCH", False) and topic.arxiv_categories:
         in_topic_delay = float(os.getenv("ARXIV_IN_TOPIC_DELAY_SECONDS", "3"))
         if in_topic_delay > 0:
             time.sleep(in_topic_delay)
@@ -559,8 +572,10 @@ def semantic_scholar_paper_from_item(item: dict[str, Any]) -> dict[str, Any] | N
     title = normalize_space(str(item.get("title") or ""))
     if not paper_id or not title:
         return None
-    authors = [str(author.get("name") or "") for author in item.get("authors", [])[:12]]
-    categories = [str(value) for value in item.get("fieldsOfStudy", []) if value]
+    raw_authors = item.get("authors") or []
+    raw_fields = item.get("fieldsOfStudy") or []
+    authors = [str(author.get("name") or "") for author in raw_authors[:12] if isinstance(author, dict)]
+    categories = [str(value) for value in raw_fields if value]
     venue = str(item.get("venue") or "")
     if venue:
         categories.append(venue)
@@ -591,7 +606,7 @@ def find_semantic_scholar_by_title(title: str, max_results: int = 5) -> dict[str
         headers["x-api-key"] = api_key
     url = f"{SEMANTIC_SCHOLAR_SEARCH_URL}?{urllib.parse.urlencode(params)}"
     data = request_json(url, headers=headers, timeout=float(os.getenv("SEMANTIC_SCHOLAR_TIMEOUT_SECONDS", "60")))
-    for item in data.get("data", []):
+    for item in data.get("data") or []:
         candidate = semantic_scholar_paper_from_item(item)
         if candidate and titles_match(title, candidate["title"]) and has_meaningful_summary(candidate):
             return candidate
@@ -709,7 +724,7 @@ def find_conference_abstract_by_title(title: str, max_results: int = 5) -> dict[
         "openalex": find_openalex_by_title,
         "crossref": find_crossref_by_title,
     }
-    for source_type in env_list("CONFERENCE_ABSTRACT_SOURCES", ["arxiv", "semantic_scholar", "openalex", "crossref"]):
+    for source_type in env_list("CONFERENCE_ABSTRACT_SOURCES", ["arxiv", "openalex", "semantic_scholar", "crossref"]):
         finder = finders.get(source_type.strip().lower())
         if not finder:
             continue
@@ -1144,32 +1159,13 @@ def fetch_semantic_scholar(topic: Topic, max_results: int, source: SourceConfig)
     url = f"{SEMANTIC_SCHOLAR_SEARCH_URL}?{urllib.parse.urlencode(params)}"
     data = request_json(url, headers=headers, timeout=float(os.getenv("SEMANTIC_SCHOLAR_TIMEOUT_SECONDS", "60")))
     papers = []
-    for item in data.get("data", []):
-        paper_id = str(item.get("paperId") or "")
-        title = normalize_space(str(item.get("title") or ""))
-        if not paper_id or not title:
+    for item in data.get("data") or []:
+        candidate = semantic_scholar_paper_from_item(item)
+        if not candidate:
             continue
-        pdf_url = str((item.get("openAccessPdf") or {}).get("url") or "")
-        authors = [str(author.get("name") or "") for author in item.get("authors", [])[:12]]
-        categories = [str(value) for value in item.get("fieldsOfStudy", []) if value]
-        venue = str(item.get("venue") or "")
-        if venue:
-            categories.append(venue)
-        papers.append(
-            {
-                "id": f"s2:{paper_id}",
-                "source": source.name,
-                "title": title,
-                "authors": [author for author in authors if author],
-                "summary": normalize_space(str(item.get("abstract") or "")),
-                "published": date_to_iso(item.get("publicationDate") or item.get("year")),
-                "updated": "",
-                "paper_url": str(item.get("url") or f"https://www.semanticscholar.org/paper/{paper_id}"),
-                "pdf_url": pdf_url,
-                "categories": categories[:8],
-                "seed_topic": topic.id,
-            }
-        )
+        candidate["source"] = source.name
+        candidate["seed_topic"] = topic.id
+        papers.append(candidate)
     return papers
 
 
@@ -1422,7 +1418,16 @@ def env_float(name: str, default: float) -> float:
         return default
 
 
+def is_placeholder_conference_summary(paper: dict[str, Any]) -> bool:
+    if paper.get("source_type") != "conference" or paper.get("abstract_source"):
+        return False
+    summary = normalize_space(str(paper.get("summary") or ""))
+    return summary.startswith("DBLP 题录")
+
+
 def has_meaningful_summary(paper: dict[str, Any], min_chars: int = 80) -> bool:
+    if is_placeholder_conference_summary(paper):
+        return False
     summary = normalize_space(str(paper.get("summary") or ""))
     return len(summary) >= min_chars
 
@@ -1451,7 +1456,7 @@ def enrich_conference_papers_from_arxiv(papers: list[dict[str, Any]]) -> dict[st
     )
     abstract_sources = env_list(
         "CONFERENCE_ABSTRACT_SOURCES",
-        ["arxiv", "semantic_scholar", "openalex", "crossref"],
+        ["arxiv", "openalex", "semantic_scholar", "crossref"],
     )
     arxiv_enrichment_enabled = "arxiv" in {source.strip().lower() for source in abstract_sources}
     stats: dict[str, Any] = {
