@@ -133,6 +133,12 @@ function finalScoreOf(paper) {
   return Number(paper.final_score ?? paper.best_match?.score ?? 0);
 }
 
+function displayFinalScore(paper) {
+  if (paper.final_score === undefined || paper.final_score === null) return "";
+  const value = Number(paper.final_score);
+  return Number.isFinite(value) ? `Final Score: ${value.toFixed(2)}` : "";
+}
+
 function levelOf(paper) {
   return String(paper.best_match?.level || "low").toLowerCase();
 }
@@ -206,6 +212,14 @@ function renderPaper(paper) {
 
   badge.textContent = `${level} ${scoreOf(paper).toFixed(2)}`;
   badge.classList.add(level);
+
+  const finalScoreText = displayFinalScore(paper);
+  if (finalScoreText) {
+    const finalScoreNode = document.createElement("span");
+    finalScoreNode.className = "paper-final-score";
+    finalScoreNode.textContent = finalScoreText;
+    badge.insertAdjacentElement("afterend", finalScoreNode);
+  }
 
   setText(node, ".paper-date", `发布 ${formatDate(paper.published)} · 收录 ${formatDate(collectionTime(paper))}`);
   setText(node, ".paper-source", paper.source || "paper");
