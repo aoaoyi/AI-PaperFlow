@@ -6,19 +6,21 @@ const state = {
     daily: null,
     conference: null,
   },
+  allPapers: [],
   theme: "dark",
   filters: {
     query: "",
     topic: "all",
     level: "all",
-    collection: "daily",
+    collection: "all",
     view: "all",
-    date: "",
+    date: null,
   },
 };
 
 const nodes = {
   updatedAt: document.querySelector("#updatedAt"),
+  dataDebug: document.querySelector("#dataDebug"),
   paperCount: document.querySelector("#paperCount"),
   weekCount: document.querySelector("#weekCount"),
   monthCount: document.querySelector("#monthCount"),
@@ -65,7 +67,19 @@ function normalizeData(payload, dataKind = "daily") {
 }
 
 function activeData() {
-  return state.datasets[state.filters.collection] || state.datasets.daily || emptyDataset();
+  if (state.filters.collection === "conference") return state.datasets.conference || emptyDataset();
+  return state.datasets.daily || emptyDataset();
+}
+
+function currentFilters() {
+  return {
+    filterMode: state.filters.view,
+    dateFilter: state.filters.date,
+    topicFilter: state.filters.topic,
+    matchFilter: state.filters.level,
+    searchQuery: state.filters.query,
+    collection: state.filters.collection,
+  };
 }
 
 function storedTheme() {
@@ -152,7 +166,7 @@ function inRange(value, start, end) {
 }
 
 function selectedDate() {
-  return parseDate(`${state.filters.date}T12:00:00`) || new Date();
+  return state.filters.date ? parseDate(`${state.filters.date}T12:00:00`) || new Date() : new Date();
 }
 
 function scoreOf(paper) {
@@ -237,8 +251,9 @@ function matchesView(paper) {
 
 function filteredPapers() {
   const data = activeData();
-  const rankScore = data.data_kind === "daily" ? finalScoreOf : scoreOf;
-  return (data.papers || [])
+  const basePapers = state.filters.collection === "conference" ? data.papers || [] : state.allPapers;
+  const rankScore = state.filters.collection === "conference" ? scoreOf : finalScoreOf;
+  return (basePapers || [])
     .filter((paper) => matchesBaseFilters(paper) && matchesView(paper))
     // Daily papers are ranked by the personalized final_score while the displayed badge keeps the original score.
     .sort((a, b) => rankScore(b) - rankScore(a) || String(paperDate(b) || "").localeCompare(String(paperDate(a) || "")));
@@ -336,15 +351,22 @@ function updateHeadings(papers) {
   nodes.resultCount.textContent = `${papers.length} 篇`;
 }
 
+function syncDateFilterState() {
+  nodes.dateFilter.disabled = state.filters.view !== "daily";
+}
+
 function render() {
   const papers = filteredPapers();
+  console.log("Filtered papers count:", papers.length);
+  console.log("Current filters:", currentFilters());
+  syncDateFilterState();
   updateHeadings(papers);
   nodes.paperList.textContent = "";
 
   if (!papers.length) {
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.textContent = "当前筛选条件下没有论文。";
+    empty.textContent = state.allPapers.length > 0 ? "当前筛选条件下没有论文，请尝试切换到全部论文。" : "当前没有可展示的论文数据。";
     nodes.paperList.appendChild(empty);
     return;
   }
@@ -369,7 +391,6 @@ function hydrateDateFilter() {
   const dates = [...new Set((data.papers || []).map((paper) => dateKey(paperDate(paper))).filter(Boolean))].sort().reverse();
   const fallback = dateKey(data.generated_at_iso || new Date().toISOString());
   const options = dates.length ? dates : [fallback];
-  if (!state.filters.date || !options.includes(state.filters.date)) state.filters.date = options[0];
   nodes.dateFilter.textContent = "";
   for (const key of options) {
     const option = document.createElement("option");
@@ -377,10 +398,14 @@ function hydrateDateFilter() {
     option.textContent = formatDate(`${key}T12:00:00`);
     nodes.dateFilter.appendChild(option);
   }
+  if (state.filters.view === "daily" && (!state.filters.date || !options.includes(state.filters.date))) {
+    state.filters.date = options[0];
+  }
+  if (state.filters.date && options.includes(state.filters.date)) nodes.dateFilter.value = state.filters.date;
 }
 
 function updateStats() {
-  const papers = activeData().papers || [];
+  const papers = state.allPapers || [];
   const now = new Date();
   const recentWeekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
   const weekPapers = papers.filter((paper) => inRange(paperDate(paper), recentWeekStart, new Date(now.getTime() + 24 * 60 * 60 * 1000)));
@@ -414,9 +439,11 @@ function bindEvents() {
     tab.addEventListener("click", () => {
       state.filters.collection = tab.dataset.collection;
       state.filters.view = "all";
+      state.filters.date = null;
       state.filters.topic = "all";
       for (const item of nodes.collectionTabs) item.classList.toggle("active", item === tab);
       for (const item of nodes.tabs) item.classList.toggle("active", item.dataset.view === state.filters.view);
+      syncDateFilterState();
       hydrateTopicFilter();
       hydrateDateFilter();
       updateStats();
@@ -426,13 +453,19 @@ function bindEvents() {
   }
   nodes.dateFilter.addEventListener("change", (event) => {
     state.filters.date = event.target.value;
+    state.filters.view = "daily";
+    for (const item of nodes.tabs) item.classList.toggle("active", item.dataset.view === "daily");
+    syncDateFilterState();
     updateStats();
     render();
   });
   for (const tab of nodes.tabs) {
     tab.addEventListener("click", () => {
       state.filters.view = tab.dataset.view;
+      if (state.filters.view === "all") state.filters.date = null;
+      if (state.filters.view === "daily" && !state.filters.date) state.filters.date = nodes.dateFilter.value || null;
       for (const item of nodes.tabs) item.classList.toggle("active", item === tab);
+      syncDateFilterState();
       render();
     });
   }
@@ -443,8 +476,9 @@ async function loadData() {
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const data = await response.json();
   const normalized = normalizeData(data, "daily");
-  console.log("Loaded papers data:", data);
-  console.log("Parsed papers count:", normalized.papers.length);
+  const allPapers = Array.isArray(data) ? data : data.papers || [];
+  console.log("Loaded papers raw data:", data);
+  console.log("All papers count:", allPapers.length);
   console.log("First paper:", normalized.papers[0]);
   return normalized;
 }
@@ -463,7 +497,7 @@ function updateUpdatedAt(message = "") {
   const data = activeData();
   const stats = data.stats || {};
   const mode = stats.collection_mode === "incremental" ? "增量" : "初始化";
-  const kind = state.filters.collection === "conference" ? "顶会精品" : "每日新论文";
+  const kind = state.filters.collection === "conference" ? "顶会精品" : "全部论文";
   nodes.updatedAt.textContent = `${kind} · 更新于 ${formatDate(data.generated_at_iso)} · ${mode} · ${stats.llm_enabled ? "LLM" : "基础"}`;
 }
 
@@ -473,6 +507,8 @@ async function main() {
   try {
     state.datasets.daily = await loadData();
     state.datasets.conference = await loadOptionalData("./data/conference_papers.json");
+    state.allPapers = state.datasets.daily.papers || [];
+    if (nodes.dataDebug) nodes.dataDebug.textContent = `Data loaded: ${state.allPapers.length} papers`;
   } catch (error) {
     state.datasets.daily = {
       generated_at_iso: new Date().toISOString(),
@@ -486,6 +522,8 @@ async function main() {
       papers: [],
       stats: { llm_enabled: false },
     };
+    state.allPapers = [];
+    if (nodes.dataDebug) nodes.dataDebug.textContent = "Data loaded: 0 papers";
     updateUpdatedAt(`数据读取失败：${error.message}`);
   }
 
