@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI-PaperFlow Research Demo</title>
+    <link rel="stylesheet" href="./research.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>AI-PaperFlow Research Demo</h1>
+          <p>Local FastAPI backend: http://127.0.0.1:8000</p>
+        </div>
+      </header>
+
+      <nav class="tabs">
+        <button class="tab active" data-tab="qa">Paper QA</button>
+        <button class="tab" data-tab="research">Research Report</button>
+      </nav>
+
+      <section id="qaPanel" class="panel active">
+        <form id="qaForm" class="query-box">
+          <input id="questionInput" placeholder="Ask a paper question, e.g. Which paper is about inference serving?" />
+          <button type="submit">Ask</button>
+        </form>
+        <div id="qaResult" class="result"></div>
+      </section>
+
+      <section id="researchPanel" class="panel">
+        <form id="researchForm" class="query-box">
+          <input id="topicInput" placeholder="Research topic, e.g. LLM agent planning" />
+          <button type="submit">Generate Report</button>
+        </form>
+        <div id="researchResult" class="result"></div>
+      </section>
+    </main>
+    <script src="./research.js"></script>
+  </body>
+</html>

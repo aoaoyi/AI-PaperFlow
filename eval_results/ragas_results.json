@@ -1,0 +1,35 @@
+[
+  {
+    "question": "What papers discuss hallucination in retrieval augmented generation?",
+    "status": "heuristic",
+    "metrics": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevance": 1.0
+    },
+    "ragas_note": "RAGAS unavailable or optional; heuristic metrics saved."
+  },
+  {
+    "question": "Which papers evaluate retrieval augmented generation systems?",
+    "status": "heuristic",
+    "metrics": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevance": 1.0
+    },
+    "ragas_note": "RAGAS unavailable or optional; heuristic metrics saved."
+  },
+  {
+    "question": "What papers are related to LLM agent planning?",
+    "status": "heuristic",
+    "metrics": {
+      "context_precision": 1.0,
+      "context_recall": 1.0,
+      "faithfulness": 1.0,
+      "answer_relevance": 1.0
+    },
+    "ragas_note": "RAGAS unavailable or optional; heuristic metrics saved."
+  }
+]

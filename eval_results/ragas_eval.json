@@ -1,0 +1,44 @@
+{
+  "mode": "heuristic_ragas_fallback",
+  "items": [
+    {
+      "query": "LLM agent planning",
+      "context_precision": 1.0,
+      "context_recall": 0.0,
+      "faithfulness": 1.0,
+      "answer_relevance": 0.1111,
+      "verification": {
+        "citation_count": 3,
+        "unsupported_titles": [],
+        "missing_reference": false,
+        "verification_status": "passed"
+      }
+    },
+    {
+      "query": "RAG retrieval",
+      "context_precision": 0.0,
+      "context_recall": 0.0,
+      "faithfulness": 1.0,
+      "answer_relevance": 0.0,
+      "verification": {
+        "citation_count": 3,
+        "unsupported_titles": [],
+        "missing_reference": false,
+        "verification_status": "passed"
+      }
+    },
+    {
+      "query": "inference serving",
+      "context_precision": 1.0,
+      "context_recall": 0.0,
+      "faithfulness": 1.0,
+      "answer_relevance": 0.2722,
+      "verification": {
+        "citation_count": 3,
+        "unsupported_titles": [],
+        "missing_reference": false,
+        "verification_status": "passed"
+      }
+    }
+  ]
+}

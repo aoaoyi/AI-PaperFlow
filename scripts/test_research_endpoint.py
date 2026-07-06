@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from rag_api import app
+
+
+def main() -> None:
+    client = TestClient(app)
+    response = client.post(
+        "/research",
+        json={
+            "topic": "hallucination evaluation in retrieval augmented generation",
+            "top_k": 5,
+        },
+    )
+    print(f"research_status: {response.status_code}")
+    data = response.json()
+    print(f"sub_question_count: {len(data.get('sub_questions', []))}")
+    print(f"retrieved_count: {len(data.get('retrieved_papers', []))}")
+    print(f"llm_used: {data.get('llm_used')}")
+    print(f"fallback_reason: {data.get('fallback_reason')}")
+    print(f"verification_passed: {data.get('verification', {}).get('verification_passed')}")
+    for index, paper in enumerate(data.get("retrieved_papers", [])[:5], start=1):
+        print(f"{index}. {paper.get('title', '')}")
+    if response.status_code != 200 or not data.get("retrieved_papers"):
+        raise SystemExit("research endpoint test failed")
+
+
+if __name__ == "__main__":
+    main()

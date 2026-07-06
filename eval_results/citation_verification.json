@@ -1,0 +1,29 @@
+[
+  {
+    "question": "What papers discuss hallucination in retrieval augmented generation?",
+    "verification": {
+      "total_references": 3,
+      "supported_references": 3,
+      "unsupported_titles": [],
+      "verification_passed": true
+    }
+  },
+  {
+    "question": "Which papers evaluate retrieval augmented generation systems?",
+    "verification": {
+      "total_references": 3,
+      "supported_references": 3,
+      "unsupported_titles": [],
+      "verification_passed": true
+    }
+  },
+  {
+    "question": "What papers are related to LLM agent planning?",
+    "verification": {
+      "total_references": 5,
+      "supported_references": 5,
+      "unsupported_titles": [],
+      "verification_passed": true
+    }
+  }
+]

@@ -1,0 +1,80 @@
+[
+  {
+    "topic_id": "llm_agent",
+    "name": "LLM Agent",
+    "queries": [
+      "large language model agent",
+      "LLM agent planning",
+      "autonomous language agents"
+    ],
+    "keywords": [
+      "agent",
+      "planning",
+      "tool use",
+      "memory",
+      "autonomous"
+    ]
+  },
+  {
+    "topic_id": "rag",
+    "name": "Retrieval-Augmented Generation",
+    "queries": [
+      "retrieval augmented generation",
+      "RAG for question answering",
+      "retrieval augmented language model"
+    ],
+    "keywords": [
+      "retrieval",
+      "generation",
+      "knowledge",
+      "question answering",
+      "context"
+    ]
+  },
+  {
+    "topic_id": "deep_research",
+    "name": "Deep Research",
+    "queries": [
+      "deep research agent",
+      "automated research assistant",
+      "AI research agent"
+    ],
+    "keywords": [
+      "research",
+      "agent",
+      "reasoning",
+      "evidence",
+      "report"
+    ]
+  },
+  {
+    "topic_id": "tool_use",
+    "name": "Tool Use",
+    "queries": [
+      "tool use language model",
+      "function calling language model",
+      "tool augmented language model"
+    ],
+    "keywords": [
+      "tool",
+      "function calling",
+      "API",
+      "external tools"
+    ]
+  },
+  {
+    "topic_id": "multi_agent",
+    "name": "Multi-Agent",
+    "queries": [
+      "multi agent system large language model",
+      "multi-agent collaboration LLM",
+      "LLM multi-agent framework"
+    ],
+    "keywords": [
+      "multi-agent",
+      "collaboration",
+      "coordination",
+      "debate"
+    ]
+  }
+]

@@ -14,6 +14,14 @@ The main improvements include:
 
 - Personalized `final_score` ranking
 - Paper deduplication
+- RAG corpus export
+- Qwen/OpenAI-compatible RAG answer generation
+- Optional ChromaDB semantic retrieval
+- Cohere reranking fallback
+- Gemini-based RAG answer generation
+- DeepResearch Lite report generation
+- Daily email digest
+- Evaluation metrics for retrieval quality and latency
 - Final score display in paper cards
 - Unit tests for ranking and deduplication logic
 
@@ -55,6 +63,37 @@ I updated the frontend paper cards to display `final_score` when it is available
 
 The original HIGH / MEDIUM / LOW relevance score badge is still preserved. The additional final score display makes the personalized ranking result more transparent to users.
 
+I also added a separate local demo page for AI-PaperFlow research workflows. This page does not replace the original GitHub Pages paper display page. It provides Paper QA, DeepResearch Lite report generation, retrieved paper cards, and browser-based reading status management.
+
+## RAG Corpus and QA
+
+I added a standalone RAG corpus export step that converts the existing paper JSON files into `web/data/rag_corpus.json`. This keeps the original display data unchanged while providing a normalized format for retrieval and question answering.
+
+The local RAG API supports:
+
+- TF-IDF retrieval as the default fallback.
+- Gemini answer generation through environment variables.
+- Optional Qwen/OpenAI-compatible embeddings with ChromaDB semantic retrieval.
+- Optional Cohere reranking with fallback to simple score fusion.
+
+## DeepResearch Lite
+
+The project now includes a simplified research agent workflow:
+
+- Planner: decomposes a research topic into sub-questions.
+- Retriever: retrieves papers for each sub-question.
+- Evidence Aggregator: compresses retrieved paper metadata into an evidence pack.
+- Writer: generates a structured Chinese report when the LLM is available.
+- Verifier: checks whether cited paper titles are supported by retrieved papers.
+
+If the LLM, ChromaDB, embedding API, or reranker is unavailable, the workflow falls back to rule-based planning, BM25/lexical retrieval, and retrieval-only summaries.
+
+## Daily Email Digest and Evaluation
+
+I added a daily digest script that selects the top papers by `final_score` and sends them through SMTP when configured. If SMTP configuration is missing, the digest is printed to logs instead of failing.
+
+I also added a lightweight retrieval evaluation script that measures Top-1/Top-3 hit rate and average latency for TF-IDF retrieval, and optionally Milvus retrieval when available.
+
 ## Testing
 
 I added unit tests in `tests/test_collect_papers.py` to verify the new logic.
@@ -66,6 +105,12 @@ The tests cover:
 - DOI based deduplication
 - normalized title based deduplication
 - keeping the more complete paper record when duplicates are detected
+
+Additional validation scripts include:
+
+- RAG corpus export validation
+- Python compile checks for backend modules
+- Retrieval evaluation through `eval_paperflow.py`
 
 ## Result
 

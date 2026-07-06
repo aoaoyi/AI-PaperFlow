@@ -8,3 +8,13 @@ uvicorn
 scikit-learn
 openai
 python-dotenv
+google-genai
+pymilvus
+numpy
+pandas
+requests
+rank_bm25
+chromadb
+cohere
+langgraph
+ragas

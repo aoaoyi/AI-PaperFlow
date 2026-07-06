@@ -1,0 +1,15 @@
+{
+  "total_raw_count": 300,
+  "total_normalized_count": 300,
+  "total_after_dedup": 226,
+  "topic_counts": {
+    "deep_research": 55,
+    "multi_agent": 54,
+    "llm_agent": 51,
+    "tool_use": 49,
+    "rag": 54
+  },
+  "missing_abstract_count": 30,
+  "missing_pdf_count": 72,
+  "generated_at": "2026-07-02T05:09:16.978732+00:00"
+}

@@ -206,7 +206,7 @@ function safeFilename(paper) {
 function renderPaper(paper) {
   const node = nodes.template.content.firstElementChild.cloneNode(true);
   const best = paper.best_match || {};
-  const summary = paper.chinese_summary || {};
+  const summary = paper.chinese_summary || paper.structured_summary || {};
   const badge = node.querySelector(".match-badge");
   const level = levelOf(paper);
 
@@ -229,12 +229,12 @@ function renderPaper(paper) {
   setText(node, ".summary-method", summary.method);
   setText(node, ".summary-innovation", summary.innovation);
   setText(node, ".summary-evidence", summary.evidence);
-  setText(node, ".summary-limitations", summary.limitations);
+  setText(node, ".summary-limitations", summary.limitations || summary.limitation);
   setText(node, ".summary-relevant", summary.why_relevant);
   setText(node, ".match-reason", `${best.topic_name || "未分类"}：${best.reason || ""}`);
 
   const tags = node.querySelector(".paper-tags");
-  for (const category of (paper.categories || []).slice(0, 8)) {
+  for (const category of (paper.categories || paper.topics || []).slice(0, 8)) {
     const tag = document.createElement("span");
     tag.className = "tag";
     tag.textContent = category;
