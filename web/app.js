@@ -12,7 +12,7 @@ const state = {
     topic: "all",
     level: "all",
     collection: "daily",
-    view: "daily",
+    view: "all",
     date: "",
   },
 };
@@ -38,8 +38,34 @@ const nodes = {
   template: document.querySelector("#paperTemplate"),
 };
 
+function emptyDataset() {
+  return { generated_at_iso: new Date().toISOString(), topics: [], papers: [], stats: {} };
+}
+
+function normalizeData(payload, dataKind = "daily") {
+  const papers = Array.isArray(payload) ? payload : payload?.papers || [];
+  const topicMap = new Map();
+  for (const paper of papers) {
+    for (const name of paper.matched_topic_names || []) {
+      const id = String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      if (id) topicMap.set(id, { id, name });
+    }
+    for (const id of paper.matched_topic_ids || []) {
+      if (id && !topicMap.has(String(id))) topicMap.set(String(id), { id: String(id), name: String(id) });
+    }
+  }
+  return {
+    ...(Array.isArray(payload) ? {} : payload || {}),
+    data_kind: dataKind,
+    generated_at_iso: payload?.generated_at_iso || payload?.generated_at || new Date().toISOString(),
+    topics: Array.isArray(payload?.topics) && payload.topics.length ? payload.topics : [...topicMap.values()],
+    papers: Array.isArray(papers) ? papers : [],
+    stats: payload?.stats || {},
+  };
+}
+
 function activeData() {
-  return state.datasets[state.filters.collection] || state.datasets.daily || { papers: [], topics: [], stats: {} };
+  return state.datasets[state.filters.collection] || state.datasets.daily || emptyDataset();
 }
 
 function storedTheme() {
@@ -88,7 +114,11 @@ function dateKey(value) {
 }
 
 function collectionTime(paper) {
-  return paper.last_seen_at || paper.first_seen_at || paper.published || paper.updated || "";
+  return paper.publication_date || paper.published || paper.last_seen_at || paper.first_seen_at || paper.updated || "";
+}
+
+function paperDate(paper) {
+  return paper.publication_date || paper.published || collectionTime(paper);
 }
 
 function startOfDay(date) {
@@ -126,7 +156,7 @@ function selectedDate() {
 }
 
 function scoreOf(paper) {
-  return Number(paper.best_match?.score || 0);
+  return Number(paper.score ?? paper.best_match?.score ?? paper.final_score ?? 0);
 }
 
 function finalScoreOf(paper) {
@@ -140,16 +170,36 @@ function displayFinalScore(paper) {
 }
 
 function levelOf(paper) {
-  return String(paper.best_match?.level || "low").toLowerCase();
+  if (paper.best_match?.level) return String(paper.best_match.level).toLowerCase();
+  const score = finalScoreOf(paper);
+  if (score >= 15) return "high";
+  if (score >= 8) return "medium";
+  return "low";
+}
+
+function topicNamesOf(paper) {
+  return paper.matched_topic_names || paper.topics || paper.categories || [];
+}
+
+function topicIdsOf(paper) {
+  return paper.matched_topic_ids || [];
+}
+
+function abstractPreview(paper) {
+  const text = String(paper.abstract || paper.summary || "");
+  return text.length > 300 ? `${text.slice(0, 300)}...` : text;
 }
 
 function textIncludes(paper, query) {
   if (!query) return true;
   const haystack = [
     paper.title,
+    paper.abstract,
     paper.summary,
     (paper.authors || []).join(" "),
+    (paper.topics || []).join(" "),
     (paper.categories || []).join(" "),
+    (paper.matched_topic_names || []).join(" "),
     paper.best_match?.reason,
     paper.chinese_summary?.innovation,
     paper.chinese_summary?.evidence,
@@ -163,7 +213,11 @@ function textIncludes(paper, query) {
 
 function matchesBaseFilters(paper) {
   if (!textIncludes(paper, state.filters.query)) return false;
-  if (state.filters.topic !== "all" && paper.best_match?.topic_id !== state.filters.topic) return false;
+  if (state.filters.topic !== "all") {
+    const ids = topicIdsOf(paper).map(String);
+    const names = topicNamesOf(paper).map((name) => String(name || "").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""));
+    if (!ids.includes(state.filters.topic) && !names.includes(state.filters.topic)) return false;
+  }
   if (state.filters.level !== "all" && levelOf(paper) !== state.filters.level) return false;
   return true;
 }
@@ -171,12 +225,12 @@ function matchesBaseFilters(paper) {
 function matchesView(paper) {
   if (state.filters.view === "all") return true;
   const date = selectedDate();
-  const collectedAt = collectionTime(paper);
-  if (state.filters.view === "daily") return dateKey(collectedAt) === state.filters.date;
-  if (state.filters.view === "week") return inRange(collectedAt, startOfWeek(date), endOfWeek(date));
-  if (state.filters.view === "month") return inRange(collectedAt, startOfMonth(date), endOfMonth(date));
+  const publishedAt = paperDate(paper);
+  if (state.filters.view === "daily") return dateKey(publishedAt) === state.filters.date;
+  if (state.filters.view === "week") return inRange(publishedAt, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), new Date(Date.now() + 24 * 60 * 60 * 1000));
+  if (state.filters.view === "month") return inRange(publishedAt, startOfMonth(date), endOfMonth(date));
   if (state.filters.view === "highlights") {
-    return inRange(collectedAt, startOfWeek(date), endOfWeek(date)) && scoreOf(paper) >= 0.42;
+    return inRange(publishedAt, new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), new Date(Date.now() + 24 * 60 * 60 * 1000)) && finalScoreOf(paper) >= 15;
   }
   return true;
 }
@@ -187,7 +241,7 @@ function filteredPapers() {
   return (data.papers || [])
     .filter((paper) => matchesBaseFilters(paper) && matchesView(paper))
     // Daily papers are ranked by the personalized final_score while the displayed badge keeps the original score.
-    .sort((a, b) => rankScore(b) - rankScore(a) || String(b.published || "").localeCompare(String(a.published || "")));
+    .sort((a, b) => rankScore(b) - rankScore(a) || String(paperDate(b) || "").localeCompare(String(paperDate(a) || "")));
 }
 
 function setText(parent, selector, text) {
@@ -221,20 +275,20 @@ function renderPaper(paper) {
     badge.insertAdjacentElement("afterend", finalScoreNode);
   }
 
-  setText(node, ".paper-date", `发布 ${formatDate(paper.published)} · 收录 ${formatDate(collectionTime(paper))}`);
-  setText(node, ".paper-source", paper.source || "paper");
+  setText(node, ".paper-date", `发布 ${formatDate(paperDate(paper))} · 年份 ${paper.publication_year || "-"}`);
+  setText(node, ".paper-source", `${paper.source || "OpenAlex"} · 引用 ${Number(paper.cited_by_count || 0)}`);
   setText(node, ".paper-title", paper.title);
   setText(node, ".paper-authors", (paper.authors || []).slice(0, 8).join(", "));
-  setText(node, ".summary-problem", summary.problem);
+  setText(node, ".summary-problem", summary.problem || abstractPreview(paper));
   setText(node, ".summary-method", summary.method);
   setText(node, ".summary-innovation", summary.innovation);
-  setText(node, ".summary-evidence", summary.evidence);
+  setText(node, ".summary-evidence", summary.evidence || `Cited by ${Number(paper.cited_by_count || 0)}`);
   setText(node, ".summary-limitations", summary.limitations || summary.limitation);
   setText(node, ".summary-relevant", summary.why_relevant);
-  setText(node, ".match-reason", `${best.topic_name || "未分类"}：${best.reason || ""}`);
+  setText(node, ".match-reason", `${topicNamesOf(paper).join(", ") || best.topic_name || "未分类"}：${best.reason || "OpenAlex matched topic"}`);
 
   const tags = node.querySelector(".paper-tags");
-  for (const category of (paper.categories || paper.topics || []).slice(0, 8)) {
+  for (const category of topicNamesOf(paper).slice(0, 8)) {
     const tag = document.createElement("span");
     tag.className = "tag";
     tag.textContent = category;
@@ -244,10 +298,13 @@ function renderPaper(paper) {
   const absLink = node.querySelector(".abs-link");
   const pdfLink = node.querySelector(".pdf-link");
   const downloadLink = node.querySelector(".download-link");
-  const pdfUrl = paper.pdf_url || paper.paper_url || "#";
-  absLink.href = paper.paper_url || "#";
+  const sourceUrl = paper.source_url || paper.paper_url || "#";
+  const pdfUrl = paper.pdf_url || "#";
+  absLink.href = sourceUrl;
   pdfLink.href = pdfUrl;
   downloadLink.href = pdfUrl;
+  pdfLink.style.display = paper.pdf_url ? "" : "none";
+  downloadLink.style.display = paper.pdf_url ? "" : "none";
   downloadLink.setAttribute("download", safeFilename(paper));
   downloadLink.setAttribute("target", "_blank");
   downloadLink.setAttribute("rel", "noreferrer");
@@ -309,10 +366,10 @@ function hydrateTopicFilter() {
 
 function hydrateDateFilter() {
   const data = activeData();
-  const dates = [...new Set((data.papers || []).map((paper) => dateKey(collectionTime(paper))).filter(Boolean))].sort().reverse();
+  const dates = [...new Set((data.papers || []).map((paper) => dateKey(paperDate(paper))).filter(Boolean))].sort().reverse();
   const fallback = dateKey(data.generated_at_iso || new Date().toISOString());
   const options = dates.length ? dates : [fallback];
-  state.filters.date = options[0];
+  if (!state.filters.date || !options.includes(state.filters.date)) state.filters.date = options[0];
   nodes.dateFilter.textContent = "";
   for (const key of options) {
     const option = document.createElement("option");
@@ -324,10 +381,11 @@ function hydrateDateFilter() {
 
 function updateStats() {
   const papers = activeData().papers || [];
-  const date = selectedDate();
-  const weekPapers = papers.filter((paper) => inRange(collectionTime(paper), startOfWeek(date), endOfWeek(date)));
-  const monthPapers = papers.filter((paper) => inRange(collectionTime(paper), startOfMonth(date), endOfMonth(date)));
-  const top = papers.reduce((max, paper) => Math.max(max, scoreOf(paper)), 0);
+  const now = new Date();
+  const recentWeekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const weekPapers = papers.filter((paper) => inRange(paperDate(paper), recentWeekStart, new Date(now.getTime() + 24 * 60 * 60 * 1000)));
+  const monthPapers = papers.filter((paper) => inRange(paperDate(paper), startOfMonth(now), endOfMonth(now)));
+  const top = papers.reduce((max, paper) => Math.max(max, finalScoreOf(paper)), 0);
   nodes.paperCount.textContent = String(papers.length);
   nodes.weekCount.textContent = String(weekPapers.length);
   nodes.monthCount.textContent = String(monthPapers.length);
@@ -355,7 +413,7 @@ function bindEvents() {
   for (const tab of nodes.collectionTabs) {
     tab.addEventListener("click", () => {
       state.filters.collection = tab.dataset.collection;
-      state.filters.view = state.filters.collection === "conference" ? "all" : "daily";
+      state.filters.view = "all";
       state.filters.topic = "all";
       for (const item of nodes.collectionTabs) item.classList.toggle("active", item === tab);
       for (const item of nodes.tabs) item.classList.toggle("active", item.dataset.view === state.filters.view);
@@ -381,15 +439,20 @@ function bindEvents() {
 }
 
 async function loadData() {
-  const response = await fetch("./data/papers.json", { cache: "no-store" });
+  const response = await fetch("data/papers.json", { cache: "no-store" });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  return response.json();
+  const data = await response.json();
+  const normalized = normalizeData(data, "daily");
+  console.log("Loaded papers data:", data);
+  console.log("Parsed papers count:", normalized.papers.length);
+  console.log("First paper:", normalized.papers[0]);
+  return normalized;
 }
 
 async function loadOptionalData(path) {
   const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) return { generated_at_iso: new Date().toISOString(), topics: [], papers: [], stats: {} };
-  return response.json();
+  if (!response.ok) return emptyDataset();
+  return normalizeData(await response.json(), "conference");
 }
 
 function updateUpdatedAt(message = "") {
